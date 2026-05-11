@@ -1,10 +1,12 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -45,12 +47,27 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", nil)
 		return
 	}
-	imageData, err := io.ReadAll(file)
+
+	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error reading file", err)
+		respondWithError(w, http.StatusBadRequest, "bad request", err)
 		return
 	}
-	stringedimageData := base64.StdEncoding.EncodeToString(imageData)
+	var ext string
+	switch mediaType {
+	case "image/png":
+		ext = ".png"
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/gif":
+		ext = ".gif"
+	default:
+		respondWithError(w, http.StatusBadRequest, "Unsupported File Type", nil)
+		return
+	}
+	vidId := videoID.String()
+	filename := vidId + ext
+	fp := filepath.Join(cfg.assetsRoot, filename)
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error finding video", err)
@@ -60,8 +77,19 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "Unauthorized", nil)
 		return
 	}
-	dataURL := fmt.Sprintf("data:%s;base64,%s", contentType, stringedimageData)
-	video.ThumbnailURL = &dataURL
+	f, err := os.Create(fp)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error making file", err)
+		return
+	}
+	defer f.Close()
+	_, err = io.Copy(f, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error copying file", err)
+		return
+	}
+	url := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, filename)
+	video.ThumbnailURL = &url
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error updating video", err)
