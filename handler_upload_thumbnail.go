@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -63,8 +65,10 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusBadRequest, "Unsupported File Type", nil)
 		return
 	}
-	vidId := videoID.String()
-	filename := vidId + ext
+	key := make([]byte, 32)
+	rand.Read(key)
+	encoded := base64.RawURLEncoding.EncodeToString(key)
+	filename := encoded + ext
 	fp := filepath.Join(cfg.assetsRoot, filename)
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
