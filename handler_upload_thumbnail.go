@@ -59,8 +59,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		ext = ".png"
 	case "image/jpeg":
 		ext = ".jpg"
-	case "image/gif":
-		ext = ".gif"
 	default:
 		respondWithError(w, http.StatusBadRequest, "Unsupported File Type", nil)
 		return
