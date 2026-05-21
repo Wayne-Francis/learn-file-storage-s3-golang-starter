@@ -78,7 +78,11 @@ func main() {
 	if port == "" {
 		log.Fatal("PORT environment variable is not set")
 	}
-
+	awsCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(s3Region))
+	if err != nil {
+		log.Fatal("failed loading config")
+	}
+	client := s3.NewFromConfig(awsCfg)
 	cfg := apiConfig{
 		db:               db,
 		jwtSecret:        jwtSecret,
@@ -89,17 +93,13 @@ func main() {
 		s3Region:         s3Region,
 		s3CfDistribution: s3CfDistribution,
 		port:             port,
+		s3Client:         client,
 	}
 
 	err = cfg.ensureAssetsDir()
 	if err != nil {
 		log.Fatalf("Couldn't create assets directory: %v", err)
 	}
-	awsCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(s3Region))
-	if err != nil {
-		log.Fatal("failed loading config")
-	}
-	client := s3.NewFromConfig(awsCfg)
 	mux := http.NewServeMux()
 	appHandler := http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))
 	mux.Handle("/app/", appHandler)

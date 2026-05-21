@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -76,24 +81,88 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Error copying file", err)
 		return
 	}
-	_, err = file.Seek(0, io.SeekStart)
+	aspectRatio, err := getVideoAspectRatio(f.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error getting aspect ratio", err)
+		return
+	}
+	var prefix string
+	switch aspectRatio {
+	case "16:9":
+		prefix = "landscape"
+	case "9:16":
+		prefix = "portrait"
+	default:
+		prefix = "other"
+	}
+	_, err = f.Seek(0, io.SeekStart)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error", err)
 		return
 	}
 	key := make([]byte, 32)
-	rand.Read(key)
+	_, err = rand.Read(key)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error", err)
+		return
+	}
 	encoded := base64.RawURLEncoding.EncodeToString(key)
-	clientKey := encoded + ext
-	_, err = client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket:      awsString("tubely-67867"),
-		Key:         "clientKey",
-		Body:        file,
-		ContentType: awsString("video/mp4"),
+	clientKey := prefix + "/" + encoded + ext
+	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket:      aws.String(cfg.s3Bucket),
+		Key:         aws.String(clientKey),
+		Body:        f,
+		ContentType: aws.String("video/mp4"),
 	})
 
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error uploading video", err)
 		return
 	}
+	url := fmt.Sprintf("https://%v.s3.%v.amazonaws.com/%v", cfg.s3Bucket, cfg.s3Region, clientKey)
+	video.VideoURL = &url
+	err = cfg.db.UpdateVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error updating video", err)
+		return
+	}
+	respondWithJSON(w, http.StatusOK, video)
+}
+
+type aspect struct {
+	Streams []struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+	} `json:"streams"`
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	var a aspect
+	err = json.Unmarshal(out.Bytes(), &a)
+	if err != nil {
+		return "", err
+	}
+	if len(a.Streams) == 0 {
+		return "", fmt.Errorf("no streams found in ffprobe output")
+	}
+	w := a.Streams[0].Width
+	h := a.Streams[0].Height
+	ratio := float64(w) / float64(h)
+	const tolerance = 0.1
+	switch {
+	case math.Abs(ratio-16.0/9.0) < tolerance:
+		return "16:9", nil
+	case math.Abs(ratio-9.0/16.0) < tolerance:
+		return "9:16", nil
+	default:
+		return "other", nil
+	}
+
 }
