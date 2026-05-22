@@ -81,7 +81,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Error copying file", err)
 		return
 	}
-	aspectRatio, err := getVideoAspectRatio(f.Name())
+	processedPath, err := processVideoForFastStart(f.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error processing video", err)
+		return
+	}
+	processedFile, err := os.Open(processedPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error opening processed video", err)
+		return
+	}
+	defer processedFile.Close()
+	defer os.Remove(processedPath)
+	aspectRatio, err := getVideoAspectRatio(processedPath)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error getting aspect ratio", err)
 		return
@@ -95,11 +107,6 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	default:
 		prefix = "other"
 	}
-	_, err = f.Seek(0, io.SeekStart)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error", err)
-		return
-	}
 	key := make([]byte, 32)
 	_, err = rand.Read(key)
 	if err != nil {
@@ -111,7 +118,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	_, err = cfg.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(clientKey),
-		Body:        f,
+		Body:        processedFile,
 		ContentType: aws.String("video/mp4"),
 	})
 
@@ -165,4 +172,18 @@ func getVideoAspectRatio(filePath string) (string, error) {
 		return "other", nil
 	}
 
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	outputFilePath := filePath + ".processing"
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputFilePath)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		fmt.Println("command failed:", err)
+		fmt.Println("details:", stderr.String())
+		return "", fmt.Errorf("failed processing video for fast start: %v, details: %s", err, stderr.String())
+	}
+	return outputFilePath, nil
 }
